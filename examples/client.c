@@ -60,7 +60,14 @@
 
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+
+#ifndef NUTTX
 #include <openssl/conf.h>
+#endif
+
+#ifndef SSL_TLSEXT_ERR_OK
+#define SSL_TLSEXT_ERR_OK 0
+#endif
 
 enum { IO_NONE, WANT_READ, WANT_WRITE };
 
@@ -372,13 +379,18 @@ static int select_next_proto_cb(SSL *ssl, unsigned char **out,
  * Setup SSL/TLS context.
  */
 static void init_ssl_ctx(SSL_CTX *ssl_ctx) {
+#ifndef NUTTX
   /* Disable SSLv2 and enable all workarounds for buggy servers */
   SSL_CTX_set_options(ssl_ctx, SSL_OP_ALL | SSL_OP_NO_SSLv2);
   SSL_CTX_set_mode(ssl_ctx, SSL_MODE_AUTO_RETRY);
   SSL_CTX_set_mode(ssl_ctx, SSL_MODE_RELEASE_BUFFERS);
+#endif
   /* Set NPN callback */
 #ifndef OPENSSL_NO_NEXTPROTONEG
   SSL_CTX_set_next_proto_select_cb(ssl_ctx, select_next_proto_cb, NULL);
+#else
+  unsigned char vector[] = {2, 'h', '2', 6, 's', 'p', 'd', 'y', '/', '1'};
+  SSL_CTX_set_alpn_protos(ssl_ctx, vector, sizeof(vector));
 #endif /* !OPENSSL_NO_NEXTPROTONEG */
 }
 
@@ -445,12 +457,14 @@ static void make_non_block(int fd) {
 }
 
 static void set_tcp_nodelay(int fd) {
+#ifndef NUTTX
   int val = 1;
   int rv;
   rv = setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &val, (socklen_t)sizeof(val));
   if (rv == -1) {
     dief("setsockopt", strerror(errno));
   }
+#endif
 }
 
 /*
@@ -544,7 +558,13 @@ static void fetch_uri(const struct URI *uri) {
   if (fd == -1) {
     die("Could not open file descriptor");
   }
+
+#ifdef NUTTX
+  ssl_ctx = SSL_CTX_new(TLSv1_2_client_method());
+#else
   ssl_ctx = SSL_CTX_new(SSLv23_client_method());
+#endif
+
   if (ssl_ctx == NULL) {
     dief("SSL_CTX_new", ERR_error_string(ERR_get_error(), NULL));
   }
@@ -582,7 +602,14 @@ static void fetch_uri(const struct URI *uri) {
     diec("nghttp2_session_client_new", rv);
   }
 
+#ifdef NUTTX
+  nghttp2_settings_entry iv[] = {
+    {NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 10}
+  };
+  rv = nghttp2_submit_settings(connection.session, NGHTTP2_FLAG_NONE, iv, 1);
+#else
   rv = nghttp2_submit_settings(connection.session, NGHTTP2_FLAG_NONE, NULL, 0);
+#endif
 
   if (rv != 0) {
     diec("nghttp2_submit_settings", rv);
@@ -702,7 +729,11 @@ static int parse_uri(struct URI *res, const char *uri) {
   return 0;
 }
 
+#if defined (CONFIG_BUILD_KERNEL) || defined (LOADABLE_APP)
 int main(int argc, char **argv) {
+#else
+int nghttp2_main(int argc, char **argv) {
+#endif
   struct URI uri;
   struct sigaction act;
   int rv;
@@ -711,9 +742,11 @@ int main(int argc, char **argv) {
     die("Specify a https URI");
   }
 
+#ifndef NUTTX
   memset(&act, 0, sizeof(struct sigaction));
   act.sa_handler = SIG_IGN;
   sigaction(SIGPIPE, &act, 0);
+#endif
 
   SSL_load_error_strings();
   SSL_library_init();
