@@ -6747,24 +6747,42 @@ ssize_t nghttp2_session_mem_recv(nghttp2_session *session, const uint8_t *in,
 }
 
 int nghttp2_session_recv(nghttp2_session *session) {
-  uint8_t buf[NGHTTP2_INBOUND_BUFFER_LENGTH];
+  int ret;
+  nghttp2_mem *mem;
+  uint8_t *buf;
+
+  mem = &session->mem;
+  buf = nghttp2_mem_malloc(mem, NGHTTP2_INBOUND_BUFFER_LENGTH);
+
+  if (buf == NULL) {
+    return NGHTTP2_ERR_NOMEM;
+  }
+
   while (1) {
     ssize_t readlen;
-    readlen = session_recv(session, buf, sizeof(buf));
+    readlen = session_recv(session, buf, NGHTTP2_INBOUND_BUFFER_LENGTH);
     if (readlen > 0) {
       ssize_t proclen = nghttp2_session_mem_recv(session, buf, (size_t)readlen);
       if (proclen < 0) {
-        return (int)proclen;
+        ret = (int)proclen;
+        goto out;
       }
       assert(proclen == readlen);
     } else if (readlen == 0 || readlen == NGHTTP2_ERR_WOULDBLOCK) {
-      return 0;
+      ret = 0;
+      goto out;
     } else if (readlen == NGHTTP2_ERR_EOF) {
-      return NGHTTP2_ERR_EOF;
+      ret = NGHTTP2_ERR_EOF;
+      goto out;
     } else if (readlen < 0) {
-      return NGHTTP2_ERR_CALLBACK_FAILURE;
+      ret = NGHTTP2_ERR_CALLBACK_FAILURE;
+      goto out;
     }
   }
+
+out:
+  nghttp2_mem_free(mem, buf);
+  return ret;
 }
 
 /*
